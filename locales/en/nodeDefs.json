@@ -1,0 +1,57 @@
+{
+  "MinuteSaveImage": {
+    "display_name": "Minute Save Image",
+    "description": "Save images with automatic time-stamped folders / file names. Time tokens like %H-%M or [time(%H-%M)] give minute precision.",
+    "inputs": {
+      "images": "Images to save",
+      "保存模式": "Save mode",
+      "二级目录": "Subfolder",
+      "文件夹时间格式": "Folder time format",
+      "文件名前缀": "File name prefix",
+      "文件名时间格式": "File name time format",
+      "文件名分隔符": "File name delimiter",
+      "文件名序号位数": "Counter digits",
+      "文件名序号起始": "Counter start",
+      "图片格式": "Image format",
+      "质量": "Quality",
+      "重名处理": "On duplicate name",
+      "嵌入工作流": "Embed workflow",
+      "允许绝对路径": "Allow absolute path",
+      "输出路径_覆盖": "Output path override",
+      "额外文件名": "Extra file name"
+    },
+    "outputs": {
+      "images": "Images",
+      "完整路径": "Full paths",
+      "文件夹": "Folder"
+    }
+  },
+  "MinuteSaveVideo": {
+    "display_name": "Minute Save Video",
+    "description": "Encode image sequences into a video and save it into time-stamped folders / file names. Minute precision by default; optional audio.",
+    "inputs": {
+      "images": "Images (batch = frames)",
+      "帧率": "Frame rate",
+      "视频格式": "Video format",
+      "CRF质量": "CRF quality",
+      "保存模式": "Save mode",
+      "二级目录": "Subfolder",
+      "文件夹时间格式": "Folder time format",
+      "文件名前缀": "File name prefix",
+      "文件名时间格式": "File name time format",
+      "文件名分隔符": "File name delimiter",
+      "文件名序号位数": "Counter digits",
+      "文件名序号起始": "Counter start",
+      "重名处理": "On duplicate name",
+      "保存元数据": "Save metadata",
+      "允许绝对路径": "Allow absolute path",
+      "audio": "Audio",
+      "输出路径_覆盖": "Output path override",
+      "额外文件名": "Extra file name"
+    },
+    "outputs": {
+      "完整路径": "Full path",
+      "文件夹": "Folder"
+    }
+  }
+}
