@@ -149,24 +149,41 @@ def _apply_strftime(text: str, now: time.struct_time) -> str:
         return text
 
 
-def fmt_time(template: str, now: time.struct_time) -> str:
-    """把「时间格式 / 文件名前缀」字段渲染成字符串。
+def fmt_time(pattern: str, now: time.struct_time) -> str:
+    """把**时间格式字段**渲染成字符串（「输出文件夹」「文件名时间格式」用这个）。
 
-    支持「前缀 + 时间」自由组合，下面四种写法等价：
+    字段语义是「时间格式」，所以裸 ``%`` 格式符会被直接解释，
+    也可以混着写自定义文字，两种写法等价：
 
-    * ``%Y-%m-%d``                       → ``2026-09-06``
-    * ``[time(%Y-%m-%d)]``               → ``2026-09-06``
-    * ``原始待查%Y-%m-%d``               → ``原始待查2026-09-06``
-    * ``[time(%Y-%m-%d)]原始待查``       → ``2026-09-06原始待查``
-    * ``2026-09-06_%H-%M``               → ``2026-09-06_16-13``
+    * ``%Y-%m-%d``                 → ``2026-09-06``
+    * ``%H-%M-%S``                 → ``16-13-45``
+    * ``原始待查%Y-%m-%d``         → ``原始待查2026-09-06``
+    * ``%Y-%m-%d原始待查``         → ``2026-09-06原始待查``
+    * ``存档[time(%m-%d)]``        → ``存档09-06``（令牌写法也认）
 
     先做令牌解析；若结果里还留着 ``%`` 格式符，再按裸 strftime 解释一次。
-    这样「前缀是字面量、时间是格式符」的场景也能正常工作。
+    含 ``[ ]`` 的结果不会再走 strftime，避免「令牌 + 裸 %」互相干扰。
     """
-    if not template or not template.strip():
+    if not pattern or not pattern.strip():
         return ""
 
-    return _apply_strftime(parse_tokens(template, now), now)
+    return _apply_strftime(parse_tokens(pattern, now), now)
+
+
+def fmt_text(text: str, now: time.struct_time) -> str:
+    """把**自定义文字字段**渲染成字符串（「文件名前缀」「输出路径_覆盖」用这个）。
+
+    与 :func:`fmt_time` 的区别：**只认显式令牌，绝不解释裸 ``%``**。
+    因为这是「你随便写的文字」字段，写 ``A%B`` 就该原样是 ``A%B``，
+    不该被当成「月份」变成 ``ASeptember``。
+
+    支持的令牌：``[time]`` ``[time(格式)]`` ``[date]`` ``[hostname]`` ``[user]``。
+    想在这类字段里放时间，写成 ``原始待查[time(%Y-%m-%d)]`` 即可。
+    """
+    if not text or not text.strip():
+        return ""
+
+    return parse_tokens(text, now)
 
 
 def sanitize_component(part: str) -> str:
@@ -310,12 +327,13 @@ def build_target(output_dir: Path, save_mode: str,
     * ``文件夹+文件名`` / ``仅文件名``：``前缀_时间_序号``
     * ``仅文件夹`` / ``都不加``      ：``前缀_序号``（时间只体现在目录上）
 
-    前缀与时间都支持「前缀 + 时间」自由组合，
-    例如 ``原始待查%Y-%m-%d`` / ``%Y-%m-%d原始待查`` / ``我的系列示例[time(%m-%d)]``。
+    前缀是「自定义文字」字段（只认 ``[time(...)]`` 令牌，裸 ``%`` 原样保留），
+    时间字段是「时间格式」字段（裸 ``%`` 直接解释）。两者可以各自带时间，
+    例如前缀 ``原始待查[time(%m-%d)]``、时间格式 ``%H-%M-%S``。
     """
     time_in_name = save_mode in ("文件夹+文件名", "仅文件名")
 
-    prefix_rendered = fmt_time((prefix or "").strip(), now) or "ComfyUI"
+    prefix_rendered = fmt_text((prefix or "").strip(), now) or "ComfyUI"
     file_time = (file_time or "").strip()
 
     parts = [prefix_rendered]
@@ -580,8 +598,9 @@ class MinuteSaveImage:
                                                      "  MiniMaxH3/%Y-%m-%d  → output/MiniMaxH3/2026-09-06/\n"
                                                      "清空则直接写到 output 根目录"}),
                 "文件名前缀": ("STRING", {"default": "Image", "multiline": False,
-                                          "tooltip": "用来区分类型 / 系列，默认 Image。"
-                                                     "前缀可以自带时间，例如 原始待查%m-%d_%H-%M 或 [time(%m-%d)]；"
+                                          "tooltip": "自定义文字，用来区分类型 / 系列，默认 Image。"
+                                                     "本字段只认令牌：想在前缀里放时间就写 [time(%m-%d)]；"
+                                                     "裸 % 会原样保留（写 A%B 就是 A%B，不会被当成月份）。"
                                                      "留空则用「输出文件夹」的最后一段"}),
                 "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False,
                                               "tooltip": "默认 %Y-%m-%d_%H-%M-%S（到秒）。"
@@ -632,7 +651,9 @@ class MinuteSaveImage:
 
         prefix = 文件名前缀.strip() or default_prefix(输出文件夹, now)
         if 额外文件名:
-            prefix = f"{prefix}{文件名分隔符}{额外文件名}"
+            extra_text = parse_tokens(str(额外文件名), now)
+            if extra_text:
+                prefix = f"{prefix}{文件名分隔符}{extra_text}"
 
         ext = 图片格式.lower()
         if ext == "jpeg":
@@ -716,8 +737,9 @@ class MinuteSaveVideo:
                                                      "  MiniMaxH3/%Y-%m-%d  → output/MiniMaxH3/2026-09-06/\n"
                                                      "清空则直接写到 output 根目录"}),
                 "文件名前缀": ("STRING", {"default": "Video", "multiline": False,
-                                          "tooltip": "用来区分类型 / 系列，默认 Video（也可填系列名「我的系列示例」）；"
-                                                     "[time(...)] 令牌同样可用；留空则用「输出文件夹」的最后一段"}),
+                                          "tooltip": "自定义文字，默认 Video（也可填系列名「我的系列示例」）。"
+                                                     "本字段只认令牌：[time(%m-%d)]；裸 % 原样保留。"
+                                                     "留空则用「输出文件夹」的最后一段"}),
                 "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False,
                                               "tooltip": "默认 %Y-%m-%d_%H-%M-%S（到秒）。"
                                                          "只要分秒填 %H-%M-%S，只要分钟填 %H-%M，"
@@ -765,7 +787,9 @@ class MinuteSaveVideo:
 
         prefix = 文件名前缀.strip() or default_prefix(输出文件夹, now)
         if 额外文件名:
-            prefix = f"{prefix}{文件名分隔符}{额外文件名}"
+            extra_text = parse_tokens(str(额外文件名), now)
+            if extra_text:
+                prefix = f"{prefix}{文件名分隔符}{extra_text}"
 
         ext = _FORMAT_ALIASES.get(视频格式, "mp4")
         path, directory, _ = build_target(

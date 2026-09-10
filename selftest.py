@@ -78,6 +78,21 @@ for template, expected in fmt_cases.items():
     got = N.fmt_time(template, now)
     check(f"fmt_time({template!r})", got == expected, f"得到 {got!r}，期望 {expected!r}")
 
+print("\n  —— fmt_text()：自定义文字字段只认令牌，裸 % 必须原样保留 ——")
+text_cases = {
+    "原始待查": "原始待查",
+    "seedVR2放大": "seedVR2放大",
+    "A%B": "A%B",                 # 不能被当成 %B=月份
+    "进度100%": "进度100%",
+    "50%_off": "50%_off",
+    "存档[time(%m-%d)]": "存档09-06",
+    "[time(%Y%m%d)]_批次": "20260906_批次",
+    "": "",
+}
+for template, expected in text_cases.items():
+    got = N.fmt_text(template, now)
+    check(f"fmt_text({template!r})", got == expected, f"得到 {got!r}，期望 {expected!r}")
+
 # --------------------------------------------------------------------------- #
 section("2. 文件名清理")
 
@@ -170,9 +185,12 @@ check("输出路径_覆盖(相对)追加在最后", d_ov.name == "子目录" and
 d_abs = N.resolve_output_dir("%Y-%m-%d", str(Path(tempfile.gettempdir()) / "MS绝对"), True, now)
 check("输出路径_覆盖(绝对)整体替换", d_abs.name == "MS绝对", str(d_abs))
 
-# 文件名前缀也带时间
-p12, _, _ = assemble("", "原始待查%m-%d_%H-%M", "%H-%M", mode="都不加(固定名)")
-check("文件名前缀可自带时间", p12.name == "原始待查09-06_16-13_0001.png", p12.name)
+# 文件名前缀（自定义文字字段）：带时间要用令牌写法
+p12, _, _ = assemble("", "原始待查[time(%m-%d)]", "%H-%M", mode="都不加(固定名)")
+check("文件名前缀可自带时间（令牌写法）", p12.name == "原始待查09-06_0001.png", p12.name)
+
+p12b, _, _ = assemble("", "A%B", "%H-%M", mode="都不加(固定名)")
+check("前缀里的裸 % 原样保留", p12b.name == "A%B_0001.png", p12b.name)
 
 # 注意：这里故意不恢复 N._OUTPUT_DIR —— 第 4、5 节要把节点真实跑一遍，
 # 让产物落在临时目录而不是用户的 output。末尾统一恢复。
