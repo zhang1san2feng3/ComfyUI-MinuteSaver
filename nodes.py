@@ -743,10 +743,19 @@ class MinuteSaveVideo:
 
         encode_video(frames, 帧率, path, 视频格式, CRF质量, audio=audio, metadata=metadata)
 
-        _, inside = to_ui_location(path)
-        folder_display = to_ui_location(path)[0]["subfolder"] if inside else str(path.parent)
+        location, inside = to_ui_location(path)
+        folder_display = location["subfolder"] if inside else str(path.parent)
 
-        ui = {"text": [str(path)], "gifs": []}
+        # 让 ComfyUI 前端能直接预览视频（历史记录 + 节点预览）
+        ui = {
+            "text": [str(path)],
+            "gifs": [{
+                "filename": path.name,
+                "subfolder": location["subfolder"],
+                "type": location["type"],
+                "format": "video/x-matroska" if ext == "mkv" else f"video/{ext}",
+            }] if inside else [],
+        }
         return {"ui": ui, "result": (str(path), folder_display)}
 
 
