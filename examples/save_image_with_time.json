@@ -293,9 +293,9 @@
       "widgets_values": [
         "文件夹+文件名",
         "ComfyUI_Image",
-        "%Y-%m-%d",
+        "原始待查%Y-%m-%d",
         "ComfyUI",
-        "%H-%M",
+        "%Y-%m-%d_%H-%M-%S",
         "_",
         4,
         1,
