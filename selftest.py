@@ -237,6 +237,8 @@ check("文件名时间清空 → 前缀_序号", p_notime.name == "notime_0001.p
 check("文件名时间清空不影响落盘目录", p_notime.parent == tmp_root, str(p_notime.parent))
 
 # 只保留分钟 / 只保留秒
+# 注意：跨分钟/跨秒边界执行时，保存瞬间的时间可能比此处取值晚一格，
+# 所以放宽为「匹配取值时或下一格的时间」。
 for pattern, label in (("%H-%M", "到分钟"), ("%H-%M-%S", "到秒")):
     out = img_node.save_images(
         rgb, "文件夹+文件名", "%Y-%m-%d", "t", pattern, "_", 4, 1,
@@ -244,7 +246,10 @@ for pattern, label in (("%H-%M", "到分钟"), ("%H-%M-%S", "到秒")):
         输出路径_覆盖=str(tmp_root),
     )
     p_t = Path(out["result"][1].splitlines()[0])
-    check(f"文件名时间{label}", p_t.name == f"t_{time.strftime(pattern)}_0001.png", p_t.name)
+    stamp_now = time.strftime(pattern)
+    stamp_next = time.strftime(pattern, time.localtime(time.time() + 1.5))
+    check(f"文件名时间{label}",
+          p_t.name in (f"t_{stamp_now}_0001.png", f"t_{stamp_next}_0001.png"), p_t.name)
 
 # 批次保存
 batch = np.random.rand(3, 32, 32, 3).astype(np.float32)
@@ -299,6 +304,30 @@ check("mp4 文件名 = 前缀_日期_时分秒_序号",
 check("mp4 落在指定目录", video_path.parent == tmp_root, str(video_path.parent))
 print(f"  mp4 → {video_path}  ({video_path.stat().st_size} 字节)")
 
+# 超大工作流元数据（复现 WinError 206：命令行过长）
+huge = {
+    "comfy_prompt": '{"text": "' + ("超长提示词" * 4000) + '"}',
+    "comfy_workflow": '{"nodes": [' + ", ".join('{"id": %d}' % i for i in range(3000)) + "]}",
+    "comfy_created": time.strftime("%Y-%m-%d %H:%M:%S"),
+}
+huge_dest = tmp_root / "huge_meta.mp4"
+try:
+    N.encode_video(frames, 8.0, huge_dest, "mp4 (h264)", 20, audio=None, metadata=huge)
+    check("超大元数据不致崩溃（不再触发 WinError 206）",
+          huge_dest.is_file() and huge_dest.stat().st_size > 0, str(huge_dest))
+except OSError as exc:
+    check("超大元数据不致崩溃（不再触发 WinError 206）", False, str(exc))
+
+sidecars = sorted(p.name for p in tmp_root.glob("huge_meta.mp4.*.json"))
+check("超大元数据外置为 json", len(sidecars) >= 2, str(sidecars))
+check("外置文件内容与原元数据一致",
+      (tmp_root / "huge_meta.mp4.workflow.json").is_file()
+      and (tmp_root / "huge_meta.mp4.workflow.json").read_text(encoding="utf-8") == huge["comfy_workflow"],
+      str(sidecars))
+embedded, overflow = N.split_metadata(huge, ["ffmpeg"], N.CMDLINE_BUDGET)
+check("超长键被判定为需外置", "comfy_workflow" in overflow and not embedded.get("comfy_workflow"),
+      f"embedded={list(embedded)} overflow={overflow}")
+
 # 带音频
 sr = 44100
 wave = (np.sin(2 * np.pi * 440 * np.arange(int(sr * 1.0)) / sr) * 0.3).astype(np.float32)
@@ -343,6 +372,29 @@ try:
     check("奇数尺寸编码成功", Path(out["result"][0]).is_file())
 except Exception as exc:  # noqa: BLE001
     check("奇数尺寸编码成功", False, str(exc))
+
+# 超长文件名 / 超长路径保护
+huge_stem = "超长文件名测试" * 60
+N._OUTPUT_DIR = tmp_root
+out = img_node.save_images(
+    rgb, "文件夹+文件名", "%Y-%m-%d", huge_stem, "%H-%M-%S", "_", 4, 1,
+    "png", 95, "按序号自动递增", False, True, 输出路径_覆盖=str(tmp_root),
+)
+p_long = Path(out["result"][1])
+check("超长文件名被收缩（整条路径不超限）", len(str(p_long)) <= N.MAX_PATH_BUDGET + 20,
+      f"{len(str(p_long))} 字符: {p_long.name[:60]}...")
+check("超长文件名仍能落盘", p_long.is_file(), str(p_long))
+import re as _re
+check("收缩后带哈希尾巴（不同长名不会互撞）",
+      len(p_long.stem) <= N.MAX_STEM_LENGTH
+      and _re.fullmatch("[0-9a-f]{8}", p_long.stem.rsplit("_", 1)[0][-8:]) is not None,
+      p_long.stem[-24:])
+long_a = N.unique_path(tmp_root, "长名字甲" * 80, "png", "按序号自动递增", 4, 1)
+long_b = N.unique_path(tmp_root, "长名字乙" * 80, "png", "按序号自动递增", 4, 1)
+check("两个不同的超长名字收缩后不互撞", long_a != long_b, f"{long_a.name[-20:]} vs {long_b.name[-20:]}")
+deep = tmp_root / "很深的目录" / "再深一层" / "继续深" / "非常深"
+check("深目录下也能收缩",
+      len(str(N.unique_path(deep, huge_stem, "png", "按序号自动递增", 4, 1))) <= N.MAX_PATH_BUDGET + 20)
 
 # --------------------------------------------------------------------------- #
 section("6. 结果")

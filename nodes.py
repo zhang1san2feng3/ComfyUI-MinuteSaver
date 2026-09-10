@@ -49,6 +49,7 @@ Windows 文件名不允许 ``: * ? " < > |``，会被自动替换成 ``_``。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -139,6 +140,15 @@ VIDEO_CRF_VALUES = {
     "最小体积 (32)": 32,
 }
 VIDEO_CRF_DEFAULT = "默认·推荐 (19)"
+
+# Windows CreateProcess 命令行长上限约 32767 字符；这里是留给元数据的预算，
+# 超出的元数据会外置成 json，避免 WinError 206「文件名或扩展名太长」。
+CMDLINE_BUDGET = 6000
+
+# Windows 单条路径上限 260 字符（MAX_PATH），留 10 字符余量给序号后缀 / 旁挂文件。
+MAX_PATH_BUDGET = 250
+# 文件名主干的绝对上限（目录很深时还会按实际目录长度进一步收缩）
+MAX_STEM_LENGTH = 150
 
 _ILLEGAL_RE = re.compile(r'[<>:"|?*\x00-\x1f]')
 TOKEN_RE = re.compile(r"\[time\((.*?)\)\]")
@@ -278,7 +288,8 @@ def resolve_output_dir(output_folder: str, output_path_override: str,
     """
     parts: list[Path] = []
 
-    folder_rel = sanitize_relative_path(render_folder_path(output_folder, now))
+    folder_rel = fit_folder_path(sanitize_relative_path(render_folder_path(output_folder, now)),
+                                 _OUTPUT_DIR)
     if folder_rel:
         parts.append(Path(folder_rel))
 
@@ -287,7 +298,8 @@ def resolve_output_dir(output_folder: str, output_path_override: str,
         expanded = parse_tokens(override, now)
         if allow_absolute and Path(expanded).is_absolute():
             return Path(expanded)                  # 规则 2：整体改到绝对目录
-        extra_rel = sanitize_relative_path(strip_leading_abs(expanded))
+        extra_rel = fit_folder_path(sanitize_relative_path(strip_leading_abs(expanded)),
+                                    _OUTPUT_DIR)
         if extra_rel:
             parts.append(Path(extra_rel))          # 规则 3：追加在输出文件夹之后
 
@@ -295,6 +307,39 @@ def resolve_output_dir(output_folder: str, output_path_override: str,
         return _OUTPUT_DIR                         # 规则 4：直接写 output 根目录
 
     return _OUTPUT_DIR.joinpath(*parts)
+
+
+def fit_folder_path(relative: str, base: Path) -> str:
+    """限制相对文件夹路径的总长度，避免整条路径撞上 Windows 260 字符上限。
+
+    保留**最后几段**（用户通常把有意义的名字放在后面，例如
+    ``MiniMaxH3/[time(%Y-%m-%d)]/我的系列``），超长的中间段直接丢掉。
+    如果连最后一段都太长，就把它截断并加哈希尾巴。
+    """
+    if not relative:
+        return ""
+
+    sep = "\\" if os.name == "nt" else "/"
+    parts = [p for p in relative.replace("/", sep).split(sep) if p]
+    if not parts:
+        return ""
+
+    # 给「文件名 + 序号」留位置：Image_2026-09-10_19-00-23_0001.png 这类大约 35 字符
+    room = MAX_PATH_BUDGET - len(str(base)) - 35
+    room = max(24, room)
+
+    kept: list[str] = []
+    used = 0
+    for part in reversed(parts):
+        # 每段还要占一个分隔符
+        if used + len(part) + 1 > room:
+            if not kept:
+                kept.append(fit_stem(part, base, "", 0, limit=max(24, room)))
+            break
+        kept.append(part)
+        used += len(part) + 1
+
+    return sep.join(reversed(kept))
 
 
 def default_prefix(output_folder: str, now: time.struct_time) -> str:
@@ -307,9 +352,36 @@ def default_prefix(output_folder: str, now: time.struct_time) -> str:
     return "ComfyUI"
 
 
+def fit_stem(stem: str, directory: Path | None = None, ext: str = "",
+             padding: int = 0, limit: int = MAX_STEM_LENGTH) -> str:
+    """把文件名主干收缩到安全长度，避免整条路径撞上 Windows 的 260 字符上限。
+
+    预算要把**序号后缀**（``_0001`` 这种，宽度 = 序号位数）和扩展名一起算进去，
+    否则截断后加上后缀仍会超长。目录很深时再按实际目录长度进一步收缩。
+    超长时保留头部 + 8 位哈希尾巴，保证不同长名字不会撞成同一个文件。
+    """
+    # 序号后缀占位：下划线 + 补零位数；再加一点余量给「允许重名」的毫秒后缀
+    counter_room = (1 + max(0, int(padding))) if padding else 0
+
+    budget = limit - counter_room
+    if directory is not None:
+        reserved = len(str(directory)) + len(ext) + 2 + 12   # 分隔符/点/旁挂 json
+        budget = min(budget, MAX_PATH_BUDGET - reserved - counter_room)
+    budget = max(24, budget)
+
+    if len(stem) <= budget:
+        return stem
+
+    digest = hashlib.sha1(stem.encode("utf-8", "replace")).hexdigest()[:8]
+    keep = max(1, budget - len(digest) - 1)
+    return sanitize_component(stem[:keep]) + "_" + digest
+
+
 def unique_path(directory: Path, stem: str, ext: str, mode: str,
                 padding: int, start: int, max_scan: int = 100000) -> Path:
     """在 directory 下为 stem 找一个可用文件路径。"""
+    stem = fit_stem(stem, directory, ext, padding)
+
     if mode == "直接覆盖":
         return directory / f"{stem}.{ext}"
 
@@ -549,6 +621,69 @@ def audio_to_wav_bytes(audio, limit_seconds: float | None = None) -> bytes | Non
     return header + pcm
 
 
+def _quote_for_cmd(text: str) -> str:
+    """估算某个参数在 Windows 命令行里占用的长度（保守按最长转义算）。"""
+    # 需要引号的字符；每个引号会翻倍，再算上首尾引号
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return len(escaped) + 2
+
+
+def split_metadata(metadata: dict[str, str] | None,
+                   cmd: list[str], budget: int) -> tuple[dict[str, str], list[str]]:
+    """把元数据拆成「能安全塞进命令行」和「必须外置」两部分。
+
+    Windows 的 CreateProcess 命令行上限约 32767 字符，一旦超了就会抛
+    ``FileNotFoundError: [WinError 206] 文件名或扩展名太长。``。
+    MiniMax H3 这类超大工作流（含超长提示词）很容易撞上，所以这里按估算长度
+    做预算控制：优先级高的键先占额度，装不下的返回给调用方写到旁边文件。
+    """
+    if not metadata:
+        return {}, []
+
+    used = sum(_quote_for_cmd(a) + 1 for a in cmd)
+    available = max(0, budget - used)
+
+    # 小的、常用的键优先保留在容器里
+    priority = ["comfy_created", "comfy_prompt", "comfy_workflow"]
+    ordered = ([k for k in priority if k in metadata]
+               + [k for k in metadata if k not in priority])
+
+    embedded: dict[str, str] = {}
+    overflow: list[str] = []
+    for key in ordered:
+        text = str(metadata[key])
+        cost = _quote_for_cmd(f"-metadata") + _quote_for_cmd(f"{key}={text}") + 2
+        if cost <= available:
+            embedded[key] = text
+            available -= cost
+        else:
+            overflow.append(key)
+    return embedded, overflow
+
+
+def write_metadata_sidecars(dest: Path, metadata: dict[str, str]) -> list[Path]:
+    """把元数据写成视频旁边的 json 文件（ComfyUI 生态惯例）。
+
+    文件名形如 ``xxx.mp4.prompt.json`` / ``xxx.mp4.workflow.json``，
+    内容与 PNG 里嵌入的 prompt / workflow 一致，拖回 ComfyUI 也能还原工作流。
+    """
+    written: list[Path] = []
+    failed: list[str] = []
+    for key, value in metadata.items():
+        name = key[len("comfy_"):] if key.startswith("comfy_") else key
+        suffix = ".prompt.json" if name in ("prompt", "created") else f".{name}.json"
+        path = Path(str(dest) + suffix)
+        try:
+            path.write_text(value, encoding="utf-8")
+            written.append(path)
+        except Exception as exc:      # 路径过长 / 无写权限等
+            failed.append(f"{path.name}: {exc}")
+    if failed:
+        print("[MinuteSaver] 警告：以下元数据文件写入失败（容器内也未嵌入，"
+              "如需保留请缩短文件名或文件夹名）：" + "; ".join(failed))
+    return written
+
+
 def encode_video(frames: np.ndarray, fps: float, dest: Path, fmt: str,
                  crf: int, audio=None, metadata: dict[str, str] | None = None) -> Path:
     """把 (F,H,W,3) uint8 帧编码成视频文件，可选拼接音频。"""
@@ -582,11 +717,15 @@ def encode_video(frames: np.ndarray, fps: float, dest: Path, fmt: str,
             audio_path.write_bytes(wav)
             cmd += ["-i", str(audio_path)]
 
-    for key, value in (metadata or {}).items():
-        text = str(value)
-        if len(text) > 20000:        # 避免命令行过长
-            text = text[:20000] + "...(truncated)"
-        cmd += ["-metadata", f"{key}={text}"]
+    # 元数据：能塞进命令行就塞，塞不下的写到旁边 json
+    embedded, overflow = split_metadata(metadata, cmd, CMDLINE_BUDGET)
+    for key, value in embedded.items():
+        cmd += ["-metadata", f"{key}={value}"]
+    if overflow:
+        written = write_metadata_sidecars(dest, {k: metadata[k] for k in overflow})
+        print(f"[MinuteSaver] 元数据过大（工作流太长），已外置到 "
+              f"{len(written)} 个 json 文件，容器内不再嵌入："
+              + ", ".join(p.name for p in written))
 
     cmd += vf + tail
     if audio_path is not None:
@@ -597,10 +736,21 @@ def encode_video(frames: np.ndarray, fps: float, dest: Path, fmt: str,
 
     creationflags = 0x08000000 if os.name == "nt" else 0   # CREATE_NO_WINDOW
 
-    proc = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        creationflags=creationflags,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=creationflags,
+        )
+    except OSError as exc:
+        if audio_path is not None:
+            audio_path.unlink(missing_ok=True)
+        total = sum(len(a) for a in cmd)
+        raise RuntimeError(
+            f"无法启动 ffmpeg（{exc}）。命令行总长约 {total} 字符；"
+            "如提示 WinError 206，说明命令行仍然过长，"
+            "可把「保存元数据」关掉或缩短提示词 / 文件夹名。"
+        ) from exc
+
     try:
         proc.stdin.write(frames.tobytes())
         proc.stdin.close()
