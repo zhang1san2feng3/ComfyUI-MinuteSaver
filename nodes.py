@@ -89,8 +89,56 @@ VIDEO_FORMATS = ["mp4 (h264)", "mov (h264)", "mkv (h264)", "webm (vp9)"]
 OVERWRITE_MODES = ["按序号自动递增", "直接覆盖", "允许重名(追加毫秒)"]
 SAVE_MODES = ["文件夹+文件名", "仅文件名", "仅文件夹", "都不加(固定名)"]
 
-DEFAULT_OUTPUT_FOLDER = "%Y-%m-%d"
-DEFAULT_FILE_TIME = "%Y-%m-%d_%H-%M-%S"
+# ---- 默认时间模板：统一用 [time(...)] 令牌写法（与 WAS / VHS 节点一致）----
+DEFAULT_OUTPUT_FOLDER = "[time(%Y-%m-%d)]"
+DEFAULT_FILE_TIME = "[time(%Y-%m-%d_%H-%M-%S)]"
+
+# ---- 图像质量：下拉选择（避免滑块拖不动的问题）----
+# 名字里带数值，方便一眼看出对应参数
+IMAGE_QUALITIES = [
+    "最高 (png无损 / jpg·webp 100)",
+    "很高 (95)",
+    "高 (90)",
+    "中 (80)",
+    "较低 (60)",
+    "最低·体积最小 (30)",
+]
+IMAGE_QUALITY_VALUES = {
+    "最高 (png无损 / jpg·webp 100)": 100,
+    "很高 (95)": 95,
+    "高 (90)": 90,
+    "中 (80)": 80,
+    "较低 (60)": 60,
+    "最低·体积最小 (30)": 30,
+}
+# PNG 是无损格式，「质量」在那里的含义是压缩级别（0 最快最大 / 9 最慢最小）
+QUALITY_TO_PNG_COMPRESS = {
+    "最高 (png无损 / jpg·webp 100)": 1,
+    "很高 (95)": 2,
+    "高 (90)": 3,
+    "中 (80)": 5,
+    "较低 (60)": 7,
+    "最低·体积最小 (30)": 9,
+}
+
+# ---- 视频 CRF：同样是下拉，越小越清晰、文件越大 ----
+VIDEO_CRF_LEVELS = [
+    "视觉无损 (16)",
+    "高 (18)",
+    "默认·推荐 (19)",
+    "中 (22)",
+    "较小体积 (26)",
+    "最小体积 (32)",
+]
+VIDEO_CRF_VALUES = {
+    "视觉无损 (16)": 16,
+    "高 (18)": 18,
+    "默认·推荐 (19)": 19,
+    "中 (22)": 22,
+    "较小体积 (26)": 26,
+    "最小体积 (32)": 32,
+}
+VIDEO_CRF_DEFAULT = "默认·推荐 (19)"
 
 _ILLEGAL_RE = re.compile(r'[<>:"|?*\x00-\x1f]')
 TOKEN_RE = re.compile(r"\[time\((.*?)\)\]")
@@ -588,43 +636,24 @@ class MinuteSaveImage:
         return {
             "required": {
                 "images": ("IMAGE",),
-                "保存模式": (SAVE_MODES, {"default": "文件夹+文件名",
-                                          "tooltip": "文件夹+文件名 / 仅文件名 / 仅文件夹 / 都不加"}),
-                "输出文件夹": ("STRING", {"default": DEFAULT_OUTPUT_FOLDER, "multiline": False,
-                                          "tooltip": "相对 output 的文件夹，默认 %Y-%m-%d（当前日期）。\n"
-                                                     "「前缀+时间」自由组合，也支持多级：\n"
-                                                     "  原始待查%Y-%m-%d   → output/原始待查2026-09-06/\n"
-                                                     "  我的系列示例%Y-%m-%d → output/我的系列示例2026-09-06/\n"
-                                                     "  MiniMaxH3/%Y-%m-%d  → output/MiniMaxH3/2026-09-06/\n"
-                                                     "清空则直接写到 output 根目录"}),
-                "文件名前缀": ("STRING", {"default": "Image", "multiline": False,
-                                          "tooltip": "自定义文字，用来区分类型 / 系列，默认 Image。"
-                                                     "本字段只认令牌：想在前缀里放时间就写 [time(%m-%d)]；"
-                                                     "裸 % 会原样保留（写 A%B 就是 A%B，不会被当成月份）。"
-                                                     "留空则用「输出文件夹」的最后一段"}),
-                "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False,
-                                              "tooltip": "默认 %Y-%m-%d_%H-%M-%S（到秒）。"
-                                                         "只要分秒填 %H-%M-%S，只要分钟填 %H-%M，"
-                                                         "清空则文件名不带时间，只剩 前缀_序号"}),
+                "保存模式": (SAVE_MODES, {"default": "文件夹+文件名"}),
+                "输出文件夹": ("STRING", {"default": DEFAULT_OUTPUT_FOLDER, "multiline": False}),
+                "文件名前缀": ("STRING", {"default": "Image", "multiline": False}),
+                "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False}),
                 "文件名分隔符": ("STRING", {"default": "_", "multiline": False}),
-                "文件名序号位数": ("INT", {"default": 4, "min": 1, "max": 12, "step": 1}),
-                "文件名序号起始": ("INT", {"default": 1, "min": 0, "max": 999999, "step": 1}),
+                "文件名序号位数": ("INT", {"default": 4, "min": 1, "max": 12, "step": 1,
+                                           "display": "number"}),
+                "文件名序号起始": ("INT", {"default": 1, "min": 0, "max": 999999, "step": 1,
+                                           "display": "number"}),
                 "图片格式": (IMAGE_EXTENSIONS, {"default": "png"}),
-                "质量": ("INT", {"default": 95, "min": 1, "max": 100, "step": 1,
-                                 "tooltip": "png 用于控制压缩级别，jpg/webp 为质量"}),
+                "质量": (IMAGE_QUALITIES, {"default": IMAGE_QUALITIES[0]}),
                 "重名处理": (OVERWRITE_MODES, {"default": OVERWRITE_MODES[0]}),
-                "嵌入工作流": ("BOOLEAN", {"default": True,
-                                           "tooltip": "把 prompt / 工作流写进 PNG，拖回 ComfyUI 可还原"}),
-                "允许绝对路径": ("BOOLEAN", {"default": False,
-                                             "tooltip": "开启后，输出路径填绝对路径时会直接写到该磁盘目录"}),
+                "嵌入工作流": ("BOOLEAN", {"default": True}),
+                "允许绝对路径": ("BOOLEAN", {"default": False}),
             },
             "optional": {
-                "输出路径_覆盖": ("STRING", {"default": "", "multiline": False,
-                                              "tooltip": "留空则用「输出文件夹」。会追加在「输出文件夹」之后：\n"
-                                                         "  output/<输出文件夹>/<输出路径_覆盖>/\n"
-                                                         "填绝对路径需勾选「允许绝对路径」"}),
-                "额外文件名": ("STRING", {"forceInput": True,
-                                          "tooltip": "接一个字符串进来，会追加到文件名前缀后面"}),
+                "输出路径_覆盖": ("STRING", {"default": "", "multiline": False}),
+                "额外文件名": ("STRING", {"forceInput": True}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -637,9 +666,9 @@ class MinuteSaveImage:
     FUNCTION = "save_images"
     OUTPUT_NODE = True
     CATEGORY = CATEGORY
-    DESCRIPTION = ("按系统时间自动命名保存图像。输出文件夹默认是当前日期（%Y-%m-%d），"
-                   "文件名默认带 %Y-%m-%d_%H-%M-%S（到秒）；文件名时间可以清空，只剩 前缀_序号。"
-                   "两种写法都认：%Y-%m-%d 或 [time(%Y-%m-%d)]。")
+    DESCRIPTION = ("按系统时间自动命名保存图像。输出文件夹默认 [time(%Y-%m-%d)]，"
+                   "文件名默认带 [time(%Y-%m-%d_%H-%M-%S)]（到秒）；文件名时间可以清空，"
+                   "只剩 前缀_序号。%Y-%m-%d 这种裸格式符写法同样可以。")
 
     def save_images(self, images, 保存模式, 输出文件夹, 文件名前缀,
                     文件名时间格式, 文件名分隔符, 文件名序号位数, 文件名序号起始,
@@ -647,6 +676,7 @@ class MinuteSaveImage:
                     输出路径_覆盖="", 额外文件名=None, prompt=None, extra_pnginfo=None):
 
         now = time.localtime()
+        quality = IMAGE_QUALITY_VALUES.get(质量, 95)
         out_dir = resolve_output_dir(输出文件夹, 输出路径_覆盖, 允许绝对路径, now)
 
         prefix = 文件名前缀.strip() or default_prefix(输出文件夹, now)
@@ -685,14 +715,14 @@ class MinuteSaveImage:
 
             save_kwargs = {}
             if ext == "png":
-                save_kwargs["compress_level"] = max(0, min(9, round((100 - int(质量)) / 100 * 9)))
+                save_kwargs["compress_level"] = QUALITY_TO_PNG_COMPRESS.get(质量, 1)
                 if meta:
                     pnginfo = PngInfo()
                     for key, value in meta.items():
                         pnginfo.add_text(key, value)
                     save_kwargs["pnginfo"] = pnginfo
             elif ext in ("jpg", "webp"):
-                save_kwargs["quality"] = int(质量)
+                save_kwargs["quality"] = quality
                 save_kwargs["optimize"] = True
                 if ext == "webp":
                     save_kwargs["method"] = 4
@@ -726,40 +756,24 @@ class MinuteSaveVideo:
                 "images": ("IMAGE",),
                 "帧率": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0, "step": 0.01}),
                 "视频格式": (VIDEO_FORMATS, {"default": VIDEO_FORMATS[0]}),
-                "CRF质量": ("INT", {"default": 19, "min": 0, "max": 51, "step": 1,
-                                    "tooltip": "越小越清晰、文件越大；18~20 基本视觉无损"}),
-                "保存模式": (SAVE_MODES, {"default": "文件夹+文件名",
-                                          "tooltip": "文件夹+文件名 / 仅文件名 / 仅文件夹 / 都不加"}),
-                "输出文件夹": ("STRING", {"default": DEFAULT_OUTPUT_FOLDER, "multiline": False,
-                                          "tooltip": "相对 output 的文件夹，默认 %Y-%m-%d（当前日期）。\n"
-                                                     "「前缀+时间」自由组合，也支持多级：\n"
-                                                     "  我的系列示例%Y-%m-%d → output/我的系列示例2026-09-06/\n"
-                                                     "  MiniMaxH3/%Y-%m-%d  → output/MiniMaxH3/2026-09-06/\n"
-                                                     "清空则直接写到 output 根目录"}),
-                "文件名前缀": ("STRING", {"default": "Video", "multiline": False,
-                                          "tooltip": "自定义文字，默认 Video（也可填系列名「我的系列示例」）。"
-                                                     "本字段只认令牌：[time(%m-%d)]；裸 % 原样保留。"
-                                                     "留空则用「输出文件夹」的最后一段"}),
-                "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False,
-                                              "tooltip": "默认 %Y-%m-%d_%H-%M-%S（到秒）。"
-                                                         "只要分秒填 %H-%M-%S，只要分钟填 %H-%M，"
-                                                         "清空则文件名不带时间，只剩 前缀_序号"}),
+                "CRF质量": (VIDEO_CRF_LEVELS, {"default": VIDEO_CRF_DEFAULT}),
+                "保存模式": (SAVE_MODES, {"default": "文件夹+文件名"}),
+                "输出文件夹": ("STRING", {"default": DEFAULT_OUTPUT_FOLDER, "multiline": False}),
+                "文件名前缀": ("STRING", {"default": "Video", "multiline": False}),
+                "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False}),
                 "文件名分隔符": ("STRING", {"default": "_", "multiline": False}),
-                "文件名序号位数": ("INT", {"default": 5, "min": 1, "max": 12, "step": 1}),
-                "文件名序号起始": ("INT", {"default": 1, "min": 0, "max": 999999, "step": 1}),
+                "文件名序号位数": ("INT", {"default": 5, "min": 1, "max": 12, "step": 1,
+                                           "display": "number"}),
+                "文件名序号起始": ("INT", {"default": 1, "min": 0, "max": 999999, "step": 1,
+                                           "display": "number"}),
                 "重名处理": (OVERWRITE_MODES, {"default": OVERWRITE_MODES[0]}),
-                "保存元数据": ("BOOLEAN", {"default": True,
-                                           "tooltip": "把 prompt / 工作流写进视频容器元数据"}),
+                "保存元数据": ("BOOLEAN", {"default": True}),
                 "允许绝对路径": ("BOOLEAN", {"default": False}),
             },
             "optional": {
-                "audio": ("AUDIO", {"tooltip": "接 VAE 解码出的音频，会一起写进 mp4"}),
-                "输出路径_覆盖": ("STRING", {"default": "", "multiline": False,
-                                              "tooltip": "留空则用「输出文件夹」。会追加在「输出文件夹」之后：\n"
-                                                         "  output/<输出文件夹>/<输出路径_覆盖>/\n"
-                                                         "填绝对路径需勾选「允许绝对路径」"}),
-                "额外文件名": ("STRING", {"forceInput": True,
-                                          "tooltip": "接一个字符串进来，会追加到文件名前缀后面"}),
+                "audio": ("AUDIO",),
+                "输出路径_覆盖": ("STRING", {"default": "", "multiline": False}),
+                "额外文件名": ("STRING", {"forceInput": True}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -773,7 +787,7 @@ class MinuteSaveVideo:
     OUTPUT_NODE = True
     CATEGORY = CATEGORY
     DESCRIPTION = ("把图像（批次会自动串成视频）编码保存，可一起写入音频。"
-                   "输出文件夹默认是当前日期（%Y-%m-%d），文件名默认带 %Y-%m-%d_%H-%M-%S（到秒）；"
+                   "输出文件夹默认 [time(%Y-%m-%d)]，文件名默认带 [time(%Y-%m-%d_%H-%M-%S)]（到秒）；"
                    "文件名时间可以清空，只剩 前缀_序号。")
 
     def save_video(self, images, 帧率, 视频格式, CRF质量, 保存模式, 输出文件夹,
@@ -783,6 +797,7 @@ class MinuteSaveVideo:
                    prompt=None, extra_pnginfo=None):
 
         now = time.localtime()
+        crf = VIDEO_CRF_VALUES.get(CRF质量, 19)
         out_dir = resolve_output_dir(输出文件夹, 输出路径_覆盖, 允许绝对路径, now)
 
         prefix = 文件名前缀.strip() or default_prefix(输出文件夹, now)
@@ -804,7 +819,7 @@ class MinuteSaveVideo:
             metadata = {f"comfy_{key}": value for key, value in raw.items()}
             metadata["comfy_created"] = time.strftime("%Y-%m-%d %H:%M:%S", now)
 
-        encode_video(frames, 帧率, path, 视频格式, CRF质量, audio=audio, metadata=metadata)
+        encode_video(frames, 帧率, path, 视频格式, crf, audio=audio, metadata=metadata)
 
         location, inside = to_ui_location(path)
         folder_display = location["subfolder"] if inside else str(path.parent)
