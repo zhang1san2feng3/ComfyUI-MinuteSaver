@@ -10,27 +10,30 @@
 
 默认输出长相（贴近你现有习惯）
 ------------------------------
-**文件夹 = 当前日期**，**文件名 = 前缀_时间_序号**；文件名的时间可以精确到「分」甚至「秒」，
-也可以整个清空（那就只剩 `前缀_序号`）。
+ComfyUI 的 ``output`` 是一级目录（固定，节点只能写在它下面），
+所以节点只给一个「输出文件夹」字段，默认就是**当前日期**。
+文件名 = **前缀_时间_序号**，时间可以精确到「分」甚至「秒」，也可以整个清空（只剩 `前缀_序号`）。
 
 图像::
 
-    output/ComfyUI_Image/2026-09-06/ComfyUI_2026-09-06_16-13-45_0001.png
-    └─ output ──┘└ 二级目录 ──┘└ 日期文件夹 ┘└前缀┘└── 文件时间 ──┘└序号┘
+    output/2026-09-06/Image_2026-09-06_16-13-45_0001.png
+    └ 一级 ┘└ 输出文件夹 ┘└前缀┘└── 文件时间 ──┘└序号┘
 
-视频::
+视频（默认前缀 Video；填系列名也行）::
 
-    output/MiniMaxH3/2026-09-06/我的系列示例_2026-09-06_16-13-45_00001.mp4
+    output/2026-09-06/Video_2026-09-06_16-13-45_00001.mp4
+    output/2026-09-06/我的系列示例_2026-09-06_16-13-45_00001.mp4
 
 只想要「日期文件夹 + 纯序号」，把「文件名时间格式」清空即可::
 
-    output/ComfyUI_Image/2026-09-06/ComfyUI_0001.png
+    output/2026-09-06/Image_0001.png
 
-想让文件夹也精确到分钟甚至秒，改「文件夹时间格式」::
+想让文件夹带系列名 / 精确到分钟，改「输出文件夹」::
 
-    output/ComfyUI_Image/2026-09-06_16-13/ComfyUI_2026-09-06_16-13-45_0001.png
+    output/我的系列示例2026-09-06/Image_0001.png
+    output/2026-09-06_16-13/Image_0001.png
 
-令牌一览（文件夹格式 / 文件名时间 / 文件名前缀 / 额外文件名 都能用）
+令牌一览（输出文件夹 / 文件名时间 / 文件名前缀 / 额外文件名 都能用）
 -------------------------------------------------------------------
 ======================  =========================================================
 ``[time]``              Unix 时间戳（秒）
@@ -86,7 +89,7 @@ VIDEO_FORMATS = ["mp4 (h264)", "mov (h264)", "mkv (h264)", "webm (vp9)"]
 OVERWRITE_MODES = ["按序号自动递增", "直接覆盖", "允许重名(追加毫秒)"]
 SAVE_MODES = ["文件夹+文件名", "仅文件名", "仅文件夹", "都不加(固定名)"]
 
-DEFAULT_FOLDER_TIME = "%Y-%m-%d"
+DEFAULT_OUTPUT_FOLDER = "%Y-%m-%d"
 DEFAULT_FILE_TIME = "%Y-%m-%d_%H-%M-%S"
 
 _ILLEGAL_RE = re.compile(r'[<>:"|?*\x00-\x1f]')
@@ -195,27 +198,48 @@ def strip_leading_abs(text: str) -> str:
 # 路径组装
 # --------------------------------------------------------------------------- #
 
-def resolve_base_dir(output_path: str, allow_absolute: bool) -> Path:
-    """输出根目录：绝对路径（需允许）或 ComfyUI 的 output 目录。"""
-    raw = output_path.strip()
-    if not raw:
-        return _OUTPUT_DIR
-    expanded = parse_tokens(raw)
-    if allow_absolute and Path(expanded).is_absolute():
-        return Path(expanded)
-    # 非绝对路径统一落到 output/<相对路径>，避免意外写到别处
-    return _OUTPUT_DIR
+def resolve_output_dir(output_folder: str, output_path_override: str,
+                       allow_absolute: bool, now: time.struct_time) -> Path:
+    """算出最终的输出目录（绝对路径）。
+
+    规则（顺序很重要）：
+
+    1. ``output``（ComfyUI 固定的一级目录）/ ``输出文件夹``
+    2. ``输出路径_覆盖`` 填绝对路径且勾选了「允许绝对路径」→ 它直接成为输出目录，
+       「输出文件夹」被忽略（等于彻底改写到别的盘）
+    3. ``输出路径_覆盖`` 填相对路径 → 附加在「输出文件夹」之后，
+       即 ``output/<输出文件夹>/<输出路径_覆盖>/``
+    4. 两个都留空 → 直接写 ``output`` 根目录
+    """
+    parts: list[Path] = []
+
+    folder_rel = sanitize_relative_path(render_folder_path(output_folder, now))
+    if folder_rel:
+        parts.append(Path(folder_rel))
+
+    override = (output_path_override or "").strip()
+    if override:
+        expanded = parse_tokens(override, now)
+        if allow_absolute and Path(expanded).is_absolute():
+            return Path(expanded)                  # 规则 2：整体改到绝对目录
+        extra_rel = sanitize_relative_path(strip_leading_abs(expanded))
+        if extra_rel:
+            parts.append(Path(extra_rel))          # 规则 3：追加在输出文件夹之后
+
+    if not parts:
+        return _OUTPUT_DIR                         # 规则 4：直接写 output 根目录
+
+    return _OUTPUT_DIR.joinpath(*parts)
 
 
-def resolve_extra_dir(output_path: str, allow_absolute: bool) -> Path:
-    """当 output_path 是相对路径时，它同时作为追加的子目录。"""
-    raw = output_path.strip()
-    if not raw:
-        return Path()
-    expanded = parse_tokens(raw)
-    if allow_absolute and Path(expanded).is_absolute():
-        return Path()
-    return Path(sanitize_relative_path(strip_leading_abs(expanded)))
+def default_prefix(output_folder: str, now: time.struct_time) -> str:
+    """「文件名前缀」留空时的兜底：用「输出文件夹」的最后一段（已渲染）。"""
+    folder = sanitize_relative_path(render_folder_path(output_folder, now))
+    if folder:
+        last = Path(folder).name
+        if last:
+            return last
+    return "ComfyUI"
 
 
 def unique_path(directory: Path, stem: str, ext: str, mode: str,
@@ -241,7 +265,7 @@ def unique_path(directory: Path, stem: str, ext: str, mode: str,
 
 
 def render_folder_path(template: str, now: time.struct_time) -> str:
-    """渲染「文件夹」字段：按 ``/`` 或 ``\\`` 拆段，逐段渲染时间，再拼回去。
+    """渲染「输出文件夹」字段：按 ``/`` 或 ``\\`` 拆段，逐段渲染时间，再拼回去。
 
     逐段处理很关键——整串一起处理的话，像 ``MiniMaxH3/%Y-%m-%d/我的系列示例``
     这种「有的段带时间、有的段不带」的路径就会出错。
@@ -272,26 +296,24 @@ def unique_path_indexed(directory: Path, stem: str, ext: str, mode: str,
     return path, used
 
 
-def build_target(base_dir: Path, extra_dir: Path, save_mode: str,
-                 folder_time: str, prefix: str, file_time: str,
+def build_target(output_dir: Path, save_mode: str,
+                 prefix: str, file_time: str,
                  delimiter: str, ext: str, overwrite_mode: str,
                  padding: int, start: int, now: time.struct_time):
     """统一的落盘路径计算，图像 / 视频节点共用。返回 (完整路径, 目录, 文件名主干)。
 
-    四种模式的语义：
+    ``output_dir`` 是已经算好的目录（由 :func:`resolve_output_dir` 得到，
+    已经包含「输出文件夹」和「输出路径_覆盖」），这里只负责文件名部分。
 
-    * ``文件夹+文件名``：时间进文件夹，也进文件名
-    * ``仅文件名``    ：时间只进文件名
-    * ``仅文件夹``    ：时间只进文件夹，文件名只剩 前缀_序号
-    * ``都不加``      ：两边都不加时间，文件名只剩 前缀_序号
+    文件名分支（相对于 output 目录）的语义：
 
-    时间格式与文件名前缀都支持「前缀 + 时间」自由组合，
+    * ``文件夹+文件名`` / ``仅文件名``：``前缀_时间_序号``
+    * ``仅文件夹`` / ``都不加``      ：``前缀_序号``（时间只体现在目录上）
+
+    前缀与时间都支持「前缀 + 时间」自由组合，
     例如 ``原始待查%Y-%m-%d`` / ``%Y-%m-%d原始待查`` / ``我的系列示例[time(%m-%d)]``。
     """
-    time_in_folder = save_mode in ("文件夹+文件名", "仅文件夹")
     time_in_name = save_mode in ("文件夹+文件名", "仅文件名")
-
-    folder_text = render_folder_path(folder_time, now) if time_in_folder else ""
 
     prefix_rendered = fmt_time((prefix or "").strip(), now) or "ComfyUI"
     file_time = (file_time or "").strip()
@@ -303,8 +325,7 @@ def build_target(base_dir: Path, extra_dir: Path, save_mode: str,
             parts.append(rendered)
     stem = delimiter.join(parts)
 
-    subfolder = Path(sanitize_relative_path(folder_text))
-    directory = base_dir / extra_dir / subfolder
+    directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
 
     path = unique_path(directory, sanitize_component(stem), ext,
@@ -551,17 +572,17 @@ class MinuteSaveImage:
                 "images": ("IMAGE",),
                 "保存模式": (SAVE_MODES, {"default": "文件夹+文件名",
                                           "tooltip": "文件夹+文件名 / 仅文件名 / 仅文件夹 / 都不加"}),
-                "二级目录": ("STRING", {"default": "ComfyUI_Image", "multiline": False,
-                                        "tooltip": "output 下的二级目录，可留空直接写 output 根目录"}),
-                "文件夹时间格式": ("STRING", {"default": DEFAULT_FOLDER_TIME, "multiline": False,
-                                              "tooltip": "文件夹名可以「前缀+时间」自由组合：\n"
-                                                         "  原始待查%Y-%m-%d      → 原始待查2026-09-06\n"
-                                                         "  %Y-%m-%d原始待查      → 2026-09-06原始待查\n"
-                                                         "  2026-09-06_%H-%M     → 每(分钟)一个文件夹\n"
-                                                         "清空则不加日期文件夹。令牌写法 [time(%Y-%m-%d)] 同样可用"}),
-                "文件名前缀": ("STRING", {"default": "ComfyUI", "multiline": False,
-                                          "tooltip": "前缀可以自带时间，例如 原始待查%m-%d_%H-%M 或 [time(%m-%d)]；"
-                                                     "留空则用二级目录名"}),
+                "输出文件夹": ("STRING", {"default": DEFAULT_OUTPUT_FOLDER, "multiline": False,
+                                          "tooltip": "相对 output 的文件夹，默认 %Y-%m-%d（当前日期）。\n"
+                                                     "「前缀+时间」自由组合，也支持多级：\n"
+                                                     "  原始待查%Y-%m-%d   → output/原始待查2026-09-06/\n"
+                                                     "  我的系列示例%Y-%m-%d → output/我的系列示例2026-09-06/\n"
+                                                     "  MiniMaxH3/%Y-%m-%d  → output/MiniMaxH3/2026-09-06/\n"
+                                                     "清空则直接写到 output 根目录"}),
+                "文件名前缀": ("STRING", {"default": "Image", "multiline": False,
+                                          "tooltip": "用来区分类型 / 系列，默认 Image。"
+                                                     "前缀可以自带时间，例如 原始待查%m-%d_%H-%M 或 [time(%m-%d)]；"
+                                                     "留空则用「输出文件夹」的最后一段"}),
                 "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False,
                                               "tooltip": "默认 %Y-%m-%d_%H-%M-%S（到秒）。"
                                                          "只要分秒填 %H-%M-%S，只要分钟填 %H-%M，"
@@ -580,8 +601,9 @@ class MinuteSaveImage:
             },
             "optional": {
                 "输出路径_覆盖": ("STRING", {"default": "", "multiline": False,
-                                              "tooltip": "留空则用「二级目录」。绝对路径需勾选允许绝对路径；"
-                                                         "相对路径会作为追加子目录"}),
+                                              "tooltip": "留空则用「输出文件夹」。会追加在「输出文件夹」之后：\n"
+                                                         "  output/<输出文件夹>/<输出路径_覆盖>/\n"
+                                                         "填绝对路径需勾选「允许绝对路径」"}),
                 "额外文件名": ("STRING", {"forceInput": True,
                                           "tooltip": "接一个字符串进来，会追加到文件名前缀后面"}),
             },
@@ -596,22 +618,19 @@ class MinuteSaveImage:
     FUNCTION = "save_images"
     OUTPUT_NODE = True
     CATEGORY = CATEGORY
-    DESCRIPTION = ("按系统时间自动命名保存图像。文件夹默认是当前日期（%Y-%m-%d），"
+    DESCRIPTION = ("按系统时间自动命名保存图像。输出文件夹默认是当前日期（%Y-%m-%d），"
                    "文件名默认带 %Y-%m-%d_%H-%M-%S（到秒）；文件名时间可以清空，只剩 前缀_序号。"
                    "两种写法都认：%Y-%m-%d 或 [time(%Y-%m-%d)]。")
 
-    def save_images(self, images, 保存模式, 二级目录, 文件夹时间格式, 文件名前缀,
+    def save_images(self, images, 保存模式, 输出文件夹, 文件名前缀,
                     文件名时间格式, 文件名分隔符, 文件名序号位数, 文件名序号起始,
                     图片格式, 质量, 重名处理, 嵌入工作流, 允许绝对路径,
                     输出路径_覆盖="", 额外文件名=None, prompt=None, extra_pnginfo=None):
 
         now = time.localtime()
-        base_dir = resolve_base_dir(输出路径_覆盖, 允许绝对路径)
-        extra_dir = resolve_extra_dir(输出路径_覆盖, 允许绝对路径)
-        if not 输出路径_覆盖.strip():
-            extra_dir = Path(sanitize_relative_path(render_folder_path(二级目录, now)))
+        out_dir = resolve_output_dir(输出文件夹, 输出路径_覆盖, 允许绝对路径, now)
 
-        prefix = 文件名前缀.strip() or (二级目录.strip() if 输出路径_覆盖.strip() else "ComfyUI")
+        prefix = 文件名前缀.strip() or default_prefix(输出文件夹, now)
         if 额外文件名:
             prefix = f"{prefix}{文件名分隔符}{额外文件名}"
 
@@ -620,7 +639,7 @@ class MinuteSaveImage:
             ext = "jpg"
 
         path, directory, stem = build_target(
-            base_dir, extra_dir, 保存模式, 文件夹时间格式, prefix, 文件名时间格式,
+            out_dir, 保存模式, prefix, 文件名时间格式,
             文件名分隔符, ext, 重名处理, 文件名序号位数, 文件名序号起始, now,
         )
         stem = sanitize_component(stem)
@@ -690,16 +709,15 @@ class MinuteSaveVideo:
                                     "tooltip": "越小越清晰、文件越大；18~20 基本视觉无损"}),
                 "保存模式": (SAVE_MODES, {"default": "文件夹+文件名",
                                           "tooltip": "文件夹+文件名 / 仅文件名 / 仅文件夹 / 都不加"}),
-                "二级目录": ("STRING", {"default": "MiniMaxH3", "multiline": False,
-                                        "tooltip": "output 下的二级目录，可留空"}),
-                "文件夹时间格式": ("STRING", {"default": DEFAULT_FOLDER_TIME, "multiline": False,
-                                              "tooltip": "文件夹名可以「前缀+时间」自由组合：\n"
-                                                         "  原始待查%Y-%m-%d      → 原始待查2026-09-06\n"
-                                                         "  %Y-%m-%d原始待查      → 2026-09-06原始待查\n"
-                                                         "  2026-09-06_%H-%M     → 每(分钟)一个文件夹\n"
-                                                         "清空则不加日期文件夹。令牌写法 [time(%Y-%m-%d)] 同样可用"}),
-                "文件名前缀": ("STRING", {"default": "ComfyUI", "multiline": False,
-                                          "tooltip": "例如填系列名「我的系列示例」；[time(...)] 令牌同样可用"}),
+                "输出文件夹": ("STRING", {"default": DEFAULT_OUTPUT_FOLDER, "multiline": False,
+                                          "tooltip": "相对 output 的文件夹，默认 %Y-%m-%d（当前日期）。\n"
+                                                     "「前缀+时间」自由组合，也支持多级：\n"
+                                                     "  我的系列示例%Y-%m-%d → output/我的系列示例2026-09-06/\n"
+                                                     "  MiniMaxH3/%Y-%m-%d  → output/MiniMaxH3/2026-09-06/\n"
+                                                     "清空则直接写到 output 根目录"}),
+                "文件名前缀": ("STRING", {"default": "Video", "multiline": False,
+                                          "tooltip": "用来区分类型 / 系列，默认 Video（也可填系列名「我的系列示例」）；"
+                                                     "[time(...)] 令牌同样可用；留空则用「输出文件夹」的最后一段"}),
                 "文件名时间格式": ("STRING", {"default": DEFAULT_FILE_TIME, "multiline": False,
                                               "tooltip": "默认 %Y-%m-%d_%H-%M-%S（到秒）。"
                                                          "只要分秒填 %H-%M-%S，只要分钟填 %H-%M，"
@@ -715,7 +733,9 @@ class MinuteSaveVideo:
             "optional": {
                 "audio": ("AUDIO", {"tooltip": "接 VAE 解码出的音频，会一起写进 mp4"}),
                 "输出路径_覆盖": ("STRING", {"default": "", "multiline": False,
-                                              "tooltip": "留空则用「二级目录」"}),
+                                              "tooltip": "留空则用「输出文件夹」。会追加在「输出文件夹」之后：\n"
+                                                         "  output/<输出文件夹>/<输出路径_覆盖>/\n"
+                                                         "填绝对路径需勾选「允许绝对路径」"}),
                 "额外文件名": ("STRING", {"forceInput": True,
                                           "tooltip": "接一个字符串进来，会追加到文件名前缀后面"}),
             },
@@ -731,28 +751,25 @@ class MinuteSaveVideo:
     OUTPUT_NODE = True
     CATEGORY = CATEGORY
     DESCRIPTION = ("把图像（批次会自动串成视频）编码保存，可一起写入音频。"
-                   "文件夹默认是当前日期（%Y-%m-%d），文件名默认带 %Y-%m-%d_%H-%M-%S（到秒）；"
+                   "输出文件夹默认是当前日期（%Y-%m-%d），文件名默认带 %Y-%m-%d_%H-%M-%S（到秒）；"
                    "文件名时间可以清空，只剩 前缀_序号。")
 
-    def save_video(self, images, 帧率, 视频格式, CRF质量, 保存模式, 二级目录,
-                   文件夹时间格式, 文件名前缀, 文件名时间格式, 文件名分隔符,
+    def save_video(self, images, 帧率, 视频格式, CRF质量, 保存模式, 输出文件夹,
+                   文件名前缀, 文件名时间格式, 文件名分隔符,
                    文件名序号位数, 文件名序号起始, 重名处理, 保存元数据, 允许绝对路径,
                    audio=None, 输出路径_覆盖="", 额外文件名=None,
                    prompt=None, extra_pnginfo=None):
 
         now = time.localtime()
-        base_dir = resolve_base_dir(输出路径_覆盖, 允许绝对路径)
-        extra_dir = resolve_extra_dir(输出路径_覆盖, 允许绝对路径)
-        if not 输出路径_覆盖.strip():
-            extra_dir = Path(sanitize_relative_path(render_folder_path(二级目录, now)))
+        out_dir = resolve_output_dir(输出文件夹, 输出路径_覆盖, 允许绝对路径, now)
 
-        prefix = 文件名前缀.strip() or (二级目录.strip() if 输出路径_覆盖.strip() else "ComfyUI")
+        prefix = 文件名前缀.strip() or default_prefix(输出文件夹, now)
         if 额外文件名:
             prefix = f"{prefix}{文件名分隔符}{额外文件名}"
 
         ext = _FORMAT_ALIASES.get(视频格式, "mp4")
         path, directory, _ = build_target(
-            base_dir, extra_dir, 保存模式, 文件夹时间格式, prefix, 文件名时间格式,
+            out_dir, 保存模式, prefix, 文件名时间格式,
             文件名分隔符, ext, 重名处理, 文件名序号位数, 文件名序号起始, now,
         )
 

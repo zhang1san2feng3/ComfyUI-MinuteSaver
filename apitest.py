@@ -76,9 +76,8 @@ def main() -> int:
               "inputs": {
                   "images": ["1", 0],
                   "保存模式": "文件夹+文件名",
-                  "二级目录": "MinuteSaver_API测试",
-                  "文件夹时间格式": "API测试%Y-%m-%d",
-                  "文件名前缀": "ComfyUI",
+                  "输出文件夹": "MinuteSaver_API测试/%Y-%m-%d",
+                  "文件名前缀": "Image",
                   "文件名时间格式": "%H-%M-%S",
                   "文件名分隔符": "_",
                   "文件名序号位数": 4,
@@ -102,11 +101,11 @@ def main() -> int:
         FAILS += not check(f"图像存在 {fp.name}", fp.is_file() and fp.stat().st_size > 0, str(fp))
     if paths:
         d = Path(paths[0]).parent
-        FAILS += not check("文件夹名 = 「前缀+日期」", d.name == f"API测试{time.strftime('%Y-%m-%d')}", d.name)
-        FAILS += not check("二级目录正确", d.parent.name == "MinuteSaver_API测试", d.parent.name)
+        FAILS += not check("文件夹名 = 当前日期", d.name == time.strftime("%Y-%m-%d"), d.name)
+        FAILS += not check("落在指定的输出文件夹下", d.parent.name == "MinuteSaver_API测试", d.parent.name)
         FAILS += not check("文件名序号 0001/0002/0003",
                            [Path(p).name for p in paths] ==
-                           [f"ComfyUI_{Path(paths[0]).name.split('_')[1]}_{i:04d}.png" for i in (1, 2, 3)],
+                           [f"Image_{Path(paths[0]).name.split('_')[1]}_{i:04d}.png" for i in (1, 2, 3)],
                            str([Path(p).name for p in paths]))
     FAILS += not check("返回 gifs/images 之外的 text 预览",
                        bool(node_out.get("text")), str(list(node_out.keys())))
@@ -140,8 +139,7 @@ def main() -> int:
                   "视频格式": "mp4 (h264)",
                   "CRF质量": 20,
                   "保存模式": "文件夹+文件名",
-                  "二级目录": "MinuteSaver_API测试",
-                  "文件夹时间格式": "%Y-%m-%d",
+                  "输出文件夹": "MinuteSaver_API测试/%Y-%m-%d",
                   "文件名前缀": "我的系列示例",
                   "文件名时间格式": "%Y-%m-%d_%H-%M-%S",
                   "文件名分隔符": "_",

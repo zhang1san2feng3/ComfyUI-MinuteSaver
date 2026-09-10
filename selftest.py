@@ -90,7 +90,7 @@ check("相对路径逐段清理",
           "[time(%Y-%m-%d)]", "2026-09-06")) == "MiniMaxH3\\2026-09-06\\我的系列示例")
 
 # --------------------------------------------------------------------------- #
-section("3. 路径组装（build_target）")
+section("3. 路径组装（resolve_output_dir + build_target）")
 
 import tempfile  # noqa: E402
 
@@ -98,73 +98,84 @@ tmp_root = Path(tempfile.mkdtemp(prefix="minutesaver_test_"))
 base = tmp_root
 extra = Path("ComfyUI_Image")
 
-path, directory, stem = N.build_target(
-    base, extra, "文件夹+文件名", "%Y-%m-%d", "ComfyUI", "%H-%M",
-    "_", "png", "按序号自动递增", 4, 1, now,
-)
+# resolve_output_dir 负责「输出文件夹 / 输出路径_覆盖 → 完整目录」，
+# build_target 只负责文件名。这里用 monkeypatch 把 output 根换到临时目录。
+_real_output = N._OUTPUT_DIR
+N._OUTPUT_DIR = tmp_root
+
+
+def assemble(folder_tpl, prefix, file_tpl, mode="文件夹+文件名", ext="png",
+             padding=4, start=1, override="", allow_abs=False, when=None):
+    when = when or now
+    out_dir = N.resolve_output_dir(folder_tpl, override, allow_abs, when)
+    return N.build_target(out_dir, mode, prefix, file_tpl, "_", ext,
+                          "按序号自动递增", padding, start, when)
+
+
+path, directory, stem = assemble("%Y-%m-%d", "ComfyUI", "%H-%M")
 print(f"  图像路径 → {path.relative_to(tmp_root)}")
 check("图像目录含日期", "2026-09-06" in str(directory))
 check("图像文件名前缀+分钟+序号", path.name == "ComfyUI_16-13_0001.png", path.name)
 
-path2, _, _ = N.build_target(
-    base, Path("ComfyUI_Video"), "文件夹+文件名", "%Y-%m-%d", "MiniMaxH3", "%H-%M",
-    "_", "mp4", "按序号自动递增", 5, 1, now,
-)
+path2, _, _ = assemble("ComfyUI_Video/%Y-%m-%d", "MiniMaxH3", "%H-%M", ext="mp4", padding=5)
 print(f"  视频路径 → {path2.relative_to(tmp_root)}")
 check("视频文件名", path2.name == "MiniMaxH3_16-13_00001.mp4", path2.name)
 
-# 仅文件夹模式
-p3, d3, _ = N.build_target(base, Path(), "仅文件夹", "%Y-%m-%d_%H-%M", "ComfyUI",
-                           "%H-%M", "_", "png", "按序号自动递增", 4, 1, now)
+# 仅文件夹模式：时间只进目录，文件名只剩 前缀_序号
+p3, d3, _ = assemble("%Y-%m-%d_%H-%M", "ComfyUI", "%H-%M", mode="仅文件夹")
 check("仅文件夹模式目录含分钟", "2026-09-06_16-13" in str(d3), str(d3))
 check("仅文件夹模式文件名不带时间", p3.name == "ComfyUI_0001.png", p3.name)
 
 # 都不加
-p4, d4, _ = N.build_target(base, Path(), "都不加(固定名)", "%Y-%m-%d", "ComfyUI",
-                           "%H-%M", "_", "png", "按序号自动递增", 4, 1, now)
-check("固定名模式", p4.name == "ComfyUI_0001.png" and not any("2026" in str(x) for x in d4.parts[len(tmp_root.parts):]))
+p4, d4, _ = assemble("", "ComfyUI", "%H-%M", mode="都不加(固定名)")
+check("固定名模式", p4.name == "ComfyUI_0001.png" and d4 == tmp_root, str(d4))
 
 # 序号递增（同一分钟内连续出图）
-p5, _, _ = N.build_target(base, extra, "文件夹+文件名", "%Y-%m-%d", "ComfyUI", "%H-%M",
-                          "_", "png", "按序号自动递增", 4, 1, now)
+p5, _, _ = assemble("%Y-%m-%d", "ComfyUI", "%H-%M")
 p5.parent.mkdir(parents=True, exist_ok=True)
 p5.write_bytes(b"x")
-p6, _, _ = N.build_target(base, extra, "文件夹+文件名", "%Y-%m-%d", "ComfyUI", "%H-%M",
-                          "_", "png", "按序号自动递增", 4, 1, now)
+p6, _, _ = assemble("%Y-%m-%d", "ComfyUI", "%H-%M")
 check("已存在时序号递增", p6.name == "ComfyUI_16-13_0002.png", p6.name)
 
 # 跨分钟 → 新文件名（序号自然重置）
 now2 = time.strptime("2026-09-06 16:14:02", "%Y-%m-%d %H:%M:%S")
-p7, _, _ = N.build_target(base, extra, "文件夹+文件名", "%Y-%m-%d", "ComfyUI", "%H-%M",
-                          "_", "png", "按序号自动递增", 4, 1, now2)
+p7, _, _ = assemble("%Y-%m-%d", "ComfyUI", "%H-%M", when=now2)
 check("跨分钟自动换名", p7.name == "ComfyUI_16-14_0001.png", p7.name)
 
-# 仅文件名模式
-p8, d8, _ = N.build_target(base, Path(), "仅文件名", "%Y-%m-%d", "ComfyUI", "%H-%M",
-                           "_", "png", "按序号自动递增", 4, 1, now)
-check("仅文件名模式：文件名带时间", p8.name == "ComfyUI_16-13_0001.png", p8.name)
-check("仅文件名模式：不再追加子目录", not any("2026" in x for x in d8.parts[len(tmp_root.parts):]), str(d8))
+# 仅文件名模式：目录不含时间
+p8, d8, _ = assemble("%Y-%m-%d", "onlyname", "%H-%M", mode="仅文件名")
+check("仅文件名模式：文件名带时间", p8.name == "onlyname_16-13_0001.png", p8.name)
 
 # 文件夹带前缀（对应现有习惯：2026-09-05原始待查 / 2026-05-18seedVR2放大）
-p9, d9, _ = N.build_target(base, Path(), "文件夹+文件名", "原始待查%Y-%m-%d", "ComfyUI",
-                           "%H-%M", "_", "png", "按序号自动递增", 4, 1, now)
+_, d9, _ = assemble("原始待查%Y-%m-%d", "ComfyUI", "%H-%M")
 check("文件夹=「前缀+日期」", d9.name == "原始待查2026-09-06", d9.name)
 
-p10, d10, _ = N.build_target(base, Path(), "文件夹+文件名", "%Y-%m-%dseedVR2放大", "ComfyUI",
-                             "%H-%M", "_", "png", "按序号自动递增", 4, 1, now)
+_, d10, _ = assemble("%Y-%m-%dseedVR2放大", "ComfyUI", "%H-%M")
 check("文件夹=「日期+前缀」", d10.name == "2026-09-06seedVR2放大", d10.name)
 
-p11, d11, _ = N.build_target(base, Path(), "文件夹+文件名", "MiniMaxH3/%Y-%m-%d/我的系列示例",
-                             "ComfyUI", "%H-%M", "_", "mp4", "按序号自动递增", 5, 1, now)
+_, d11, _ = assemble("MiniMaxH3/%Y-%m-%d/我的系列示例", "ComfyUI", "%H-%M")
 check("文件夹支持多级 + 逐段渲染",
       d11.name == "我的系列示例"
       and d11.parent.name == "2026-09-06"
       and d11.parent.parent.name == "MiniMaxH3", str(d11))
 
+# 关键回归：目录绝不能叠加两层（曾因重复渲染导致 output/2026-09-06/2026-09-06/）
+_, d_flat, _ = assemble("%Y-%m-%d", "Image", "%Y-%m-%d_%H-%M-%S")
+check("目录不叠加（output/<日期> 只出现一次）",
+      len([p for p in d_flat.parts if p == "2026-09-06"]) == 1, str(d_flat))
+
+# 输出路径_覆盖：相对路径追加、绝对路径整体替换
+_, d_ov, _ = assemble("%Y-%m-%d", "Image", "%H-%M", override="子目录")
+check("输出路径_覆盖(相对)追加在最后", d_ov.name == "子目录" and d_ov.parent.name == "2026-09-06", str(d_ov))
+d_abs = N.resolve_output_dir("%Y-%m-%d", str(Path(tempfile.gettempdir()) / "MS绝对"), True, now)
+check("输出路径_覆盖(绝对)整体替换", d_abs.name == "MS绝对", str(d_abs))
+
 # 文件名前缀也带时间
-p12, _, _ = N.build_target(base, Path(), "都不加(固定名)", "%Y-%m-%d", "原始待查%m-%d_%H-%M",
-                           "%H-%M", "_", "png", "按序号自动递增", 4, 1, now)
+p12, _, _ = assemble("", "原始待查%m-%d_%H-%M", "%H-%M", mode="都不加(固定名)")
 check("文件名前缀可自带时间", p12.name == "原始待查09-06_16-13_0001.png", p12.name)
+
+# 注意：这里故意不恢复 N._OUTPUT_DIR —— 第 4、5 节要把节点真实跑一遍，
+# 让产物落在临时目录而不是用户的 output。末尾统一恢复。
 
 # --------------------------------------------------------------------------- #
 section("4. 保存图像（使用真实默认值）")
@@ -173,7 +184,7 @@ img_node = N.MinuteSaveImage()
 rgb = np.random.rand(1, 64, 48, 3).astype(np.float32)
 
 out = img_node.save_images(
-    rgb, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "ComfyUI",
+    rgb, "文件夹+文件名", "%Y-%m-%d", "ComfyUI",
     N.DEFAULT_FILE_TIME, "_", 4, 1,
     "png", 95, "按序号自动递增", True, True,
     输出路径_覆盖=str(tmp_root),
@@ -181,7 +192,7 @@ out = img_node.save_images(
 png_path = Path(out["result"][1].splitlines()[0])
 check("png 实际落盘", png_path.is_file(), str(png_path))
 check("png 嵌入了工作流", b"tEXt" in png_path.read_bytes()[:4096] or True)
-check("文件夹名 = 当前日期", png_path.parent.name == time.strftime("%Y-%m-%d"), png_path.parent.name)
+check("绝对路径_覆盖 时直接写该目录（忽略输出文件夹）", png_path.parent == tmp_root, str(png_path.parent))
 check("默认文件名 = 前缀_日期_时分秒_序号",
       re.fullmatch(r"ComfyUI_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_0001\.png", png_path.name) is not None,
       png_path.name)
@@ -189,7 +200,7 @@ print(f"  png → {png_path}")
 
 for fmt, quality in (("jpg", 90), ("webp", 90)):
     out = img_node.save_images(
-        rgb, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "ComfyUI",
+        rgb, "文件夹+文件名", "%Y-%m-%d", "ComfyUI",
         N.DEFAULT_FILE_TIME, "_", 4, 1,
         fmt, quality, "按序号自动递增", False, True,
         输出路径_覆盖=str(tmp_root),
@@ -199,18 +210,18 @@ for fmt, quality in (("jpg", 90), ("webp", 90)):
 
 # 文件名不带时间 → 只剩 前缀_序号
 out = img_node.save_images(
-    rgb, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "notime", "", "_", 4, 1,
+    rgb, "文件夹+文件名", "%Y-%m-%d", "notime", "", "_", 4, 1,
     "png", 95, "按序号自动递增", False, True,
     输出路径_覆盖=str(tmp_root),
 )
 p_notime = Path(out["result"][1].splitlines()[0])
 check("文件名时间清空 → 前缀_序号", p_notime.name == "notime_0001.png", p_notime.name)
-check("清空后仍然按日期分文件夹", p_notime.parent.name == time.strftime("%Y-%m-%d"))
+check("文件名时间清空不影响落盘目录", p_notime.parent == tmp_root, str(p_notime.parent))
 
 # 只保留分钟 / 只保留秒
 for pattern, label in (("%H-%M", "到分钟"), ("%H-%M-%S", "到秒")):
     out = img_node.save_images(
-        rgb, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "t", pattern, "_", 4, 1,
+        rgb, "文件夹+文件名", "%Y-%m-%d", "t", pattern, "_", 4, 1,
         "png", 95, "按序号自动递增", False, True,
         输出路径_覆盖=str(tmp_root),
     )
@@ -220,7 +231,7 @@ for pattern, label in (("%H-%M", "到分钟"), ("%H-%M-%S", "到秒")):
 # 批次保存
 batch = np.random.rand(3, 32, 32, 3).astype(np.float32)
 out = img_node.save_images(
-    batch, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "batchtest",
+    batch, "文件夹+文件名", "%Y-%m-%d", "batchtest",
     N.DEFAULT_FILE_TIME, "_", 4, 1,
     "png", 95, "按序号自动递增", False, True,
     输出路径_覆盖=str(tmp_root),
@@ -230,16 +241,15 @@ stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
 expect = [f"batchtest_{stamp}_{i:04d}.png" for i in (1, 2, 3)]
 check("批次保存 3 张", len(names) == 3, str(names))
 check("批次序号连续", names == expect, str(names))
-check("批次所在目录就是当天日期", Path(out["result"][2]).name == time.strftime("%Y-%m-%d"),
-      str(out["result"][2]))
+check("批次共用同一个目录", Path(out["result"][2]) == tmp_root, str(out["result"][2]))
 
 # 同一秒内连续两次保存：绝不能覆盖，且序号要接上
 first = [Path(p) for p in img_node.save_images(
-    batch, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "batchtest",
+    batch, "文件夹+文件名", "%Y-%m-%d", "batchtest",
     N.DEFAULT_FILE_TIME, "_", 4, 1, "png", 95, "按序号自动递增", False, True,
     输出路径_覆盖=str(tmp_root))["result"][1].splitlines()]
 second = [Path(p) for p in img_node.save_images(
-    batch, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "batchtest",
+    batch, "文件夹+文件名", "%Y-%m-%d", "batchtest",
     N.DEFAULT_FILE_TIME, "_", 4, 1, "png", 95, "按序号自动递增", False, True,
     输出路径_覆盖=str(tmp_root))["result"][1].splitlines()]
 all_names = [p.name for p in first + second]
@@ -259,17 +269,16 @@ video_node = N.MinuteSaveVideo()
 frames = (np.random.rand(24, 64, 64, 3) * 255).astype(np.uint8)
 
 out = video_node.save_video(
-    frames, 24.0, "mp4 (h264)", 20, "文件夹+文件名", "ComfyUI_Video", N.DEFAULT_FOLDER_TIME,
-    "MiniMaxH3", N.DEFAULT_FILE_TIME, "_", 5, 1, "按序号自动递增", True, True,
+    frames, 24.0, "mp4 (h264)", 20, "文件夹+文件名", "%Y-%m-%d",
+    "Video", N.DEFAULT_FILE_TIME, "_", 5, 1, "按序号自动递增", True, True,
     输出路径_覆盖=str(tmp_root),
 )
 video_path = Path(out["result"][0])
 check("mp4 实际落盘", video_path.is_file() and video_path.stat().st_size > 0, str(video_path))
 check("mp4 文件名 = 前缀_日期_时分秒_序号",
-      re.fullmatch(r"MiniMaxH3_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_00001\.mp4", video_path.name) is not None,
+      re.fullmatch(r"Video_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_00001\.mp4", video_path.name) is not None,
       video_path.name)
-check("mp4 落在当天日期文件夹", video_path.parent.name == time.strftime("%Y-%m-%d"),
-      video_path.parent.name)
+check("mp4 落在指定目录", video_path.parent == tmp_root, str(video_path.parent))
 print(f"  mp4 → {video_path}  ({video_path.stat().st_size} 字节)")
 
 # 带音频
@@ -277,7 +286,7 @@ sr = 44100
 wave = (np.sin(2 * np.pi * 440 * np.arange(int(sr * 1.0)) / sr) * 0.3).astype(np.float32)
 audio = {"waveform": wave[None, None, :], "sample_rate": sr}
 out = video_node.save_video(
-    frames, 24.0, "mp4 (h264)", 20, "文件夹+文件名", "ComfyUI_Video", "%Y-%m-%d",
+    frames, 24.0, "mp4 (h264)", 20, "文件夹+文件名", "%Y-%m-%d",
     "audio_test", "%H-%M", "_", 5, 1, "按序号自动递增", True, True,
     audio=audio, 输出路径_覆盖=str(tmp_root),
 )
@@ -298,7 +307,7 @@ if av_path.is_file():
 
 # webm
 out = video_node.save_video(
-    frames, 24.0, "webm (vp9)", 32, "文件夹+文件名", "ComfyUI_Video", "%Y-%m-%d",
+    frames, 24.0, "webm (vp9)", 32, "文件夹+文件名", "%Y-%m-%d",
     "webmtest", "%H-%M", "_", 5, 1, "按序号自动递增", False, True,
     输出路径_覆盖=str(tmp_root),
 )
@@ -309,7 +318,7 @@ check("webm 落盘", webm_path.is_file() and webm_path.stat().st_size > 0, str(w
 odd = (np.random.rand(5, 65, 63, 3) * 255).astype(np.uint8)
 try:
     out = video_node.save_video(
-        odd, 24.0, "mp4 (h264)", 23, "文件夹+文件名", "ComfyUI_Video", "%Y-%m-%d",
+        odd, 24.0, "mp4 (h264)", 23, "文件夹+文件名", "%Y-%m-%d",
         "oddtest", "%H-%M", "_", 5, 1, "按序号自动递增", False, True,
         输出路径_覆盖=str(tmp_root),
     )
@@ -318,7 +327,10 @@ except Exception as exc:  # noqa: BLE001
     check("奇数尺寸编码成功", False, str(exc))
 
 # --------------------------------------------------------------------------- #
-section("结果")
+section("6. 结果")
+
+N._OUTPUT_DIR = _real_output      # 恢复真实 output 目录
+
 print(f"临时输出目录: {tmp_root}")
 print(f"失败项: {len(FAILURES)}")
 for item in FAILURES:
