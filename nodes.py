@@ -254,6 +254,24 @@ def render_folder_path(template: str, now: time.struct_time) -> str:
     return "/".join(parts)
 
 
+def unique_path_indexed(directory: Path, stem: str, ext: str, mode: str,
+                        padding: int, start: int, max_scan: int = 100000):
+    """同 :func:`unique_path`，但额外返回「本次实际用到的序号」。
+
+    批次保存时用它串起序号，避免同一秒内第二次运行把第一张覆盖掉。
+    """
+    path = unique_path(directory, stem, ext, mode, padding, start, max_scan)
+
+    used = start
+    if mode == "按序号自动递增":
+        try:
+            tail = path.stem.rsplit("_", 1)[1]
+            used = int(tail)
+        except (IndexError, ValueError):
+            used = start
+    return path, used
+
+
 def build_target(base_dir: Path, extra_dir: Path, save_mode: str,
                  folder_time: str, prefix: str, file_time: str,
                  delimiter: str, ext: str, overwrite_mode: str,
@@ -615,10 +633,14 @@ class MinuteSaveImage:
         saved_paths = []
         ui_images = []
 
+        # 批次内序号必须跟着上一张真实落盘的序号走：
+        # 比如第二次运行同一秒，第一张会落到 0004，那么后面就应该是 0005、0006，
+        # 而不是从 文件名序号起始 重新数（那样会跟已有文件撞名并覆盖）。
+        next_index = 文件名序号起始
         for i in range(batch.shape[0]):
-            if i > 0:      # 批次里的后续帧往后顺延序号
-                path = unique_path(directory, stem, ext, 重名处理,
-                                   文件名序号位数, 文件名序号起始 + i)
+            path, used_index = unique_path_indexed(
+                directory, stem, ext, 重名处理, 文件名序号位数, next_index)
+            next_index = used_index + 1
             pil = tensor_to_pil(batch[i])
 
             save_kwargs = {}

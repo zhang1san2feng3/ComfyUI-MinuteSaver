@@ -272,7 +272,7 @@ ComfyUI/output/MiniMaxH3/2026-09-06/ComfyUI_2026-09-06_16-13-45_00001.mp4
 
 ## 自检
 
-不启动 ComfyUI 就能跑一遍功能自检（会用你的 Python 真的生成 png/jpg/webp 和一个 mp4）：
+**第一层：不启动 ComfyUI 也能跑**（会用你的 Python 真的生成 png/jpg/webp 和一个 mp4）：
 
 ```bash
 python selftest.py
@@ -283,6 +283,16 @@ python selftest.py
 ```bash
 E:\ComfyUI-aki-v1.6\python\python.exe selftest.py
 ```
+
+**第二层：对运行中的 ComfyUI 实跑一次**（ComfyUI 需已启动）：
+
+```bash
+python apitest.py 6288      # 端口按你的实际启动参数改
+```
+
+它会通过 `/prompt` 真实排队执行两个节点，校验：文件夹名、文件名序号、
+同一秒内重复运行不覆盖、mp4 可解码、奇数宽高自动裁剪等。
+两个脚本最后都会打印 `失败项: 0` 才算通过。
 
 ---
 

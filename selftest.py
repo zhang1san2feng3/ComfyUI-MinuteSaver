@@ -233,6 +233,23 @@ check("批次序号连续", names == expect, str(names))
 check("批次所在目录就是当天日期", Path(out["result"][2]).name == time.strftime("%Y-%m-%d"),
       str(out["result"][2]))
 
+# 同一秒内连续两次保存：绝不能覆盖，且序号要接上
+first = [Path(p) for p in img_node.save_images(
+    batch, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "batchtest",
+    N.DEFAULT_FILE_TIME, "_", 4, 1, "png", 95, "按序号自动递增", False, True,
+    输出路径_覆盖=str(tmp_root))["result"][1].splitlines()]
+second = [Path(p) for p in img_node.save_images(
+    batch, "文件夹+文件名", "ComfyUI_Image", N.DEFAULT_FOLDER_TIME, "batchtest",
+    N.DEFAULT_FILE_TIME, "_", 4, 1, "png", 95, "按序号自动递增", False, True,
+    输出路径_覆盖=str(tmp_root))["result"][1].splitlines()]
+all_names = [p.name for p in first + second]
+check("两次保存路径不重叠", len(set(all_names)) == len(all_names), str(all_names))
+check("六个文件都在（无覆盖）", all(p.is_file() for p in first + second), str(all_names))
+idx = sorted(int(p.stem.rsplit("_", 1)[1]) for p in first + second)
+# 同一秒内前面的批次测试已占用 1..3，这里只校验「连续、无空洞、不撞名」
+check("两次保存序号连续且无空洞",
+      idx == list(range(idx[0], idx[0] + len(idx))), f"idx={idx} names={all_names}")
+
 # --------------------------------------------------------------------------- #
 section("5. 视频编码")
 
